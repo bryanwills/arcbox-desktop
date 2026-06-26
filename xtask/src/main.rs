@@ -43,6 +43,8 @@ enum MacosCommand {
     Embed(MacosEmbedArgs),
     /// Bundle the arcbox-daemon binary into a minimal signed `.app`.
     Bundle(MacosBundleArgs),
+    /// Prepare profile resources used by local DMG packaging.
+    PrepareResources(MacosPrepareResourcesArgs),
     /// Build, sign, notarize, and package `ArcBox.app` into a DMG.
     Dmg(MacosDmgArgs),
 }
@@ -69,10 +71,38 @@ struct MacosBundleArgs {
     /// CFBundleVersion / CFBundleShortVersionString.
     #[arg(long, default_value = "1.0")]
     version: String,
+    /// Use the development daemon identity.
+    #[arg(long)]
+    dev: bool,
+}
+
+#[derive(Args, Clone)]
+struct MacosPrepareResourcesArgs {
+    /// Prepare resources for the development profile (`~/.arcbox-dev`).
+    #[arg(long)]
+    dev: bool,
+    /// Path to the arcbox checkout (auto-discovered when unset).
+    #[arg(long, env = "ARCBOX_DIR")]
+    arcbox_dir: Option<PathBuf>,
+    /// Force re-download/rebuild even when resources already exist.
+    #[arg(long)]
+    force: bool,
+    /// Build boot assets from this local boot-assets checkout instead of downloading them.
+    #[arg(long, env = "BOOT_ASSETS_DIR")]
+    boot_assets_dir: Option<PathBuf>,
+    /// Kernel binary for local boot-assets builds. Auto-detected from common local paths when unset.
+    #[arg(long, env = "BOOT_ASSETS_KERNEL")]
+    boot_assets_kernel: Option<PathBuf>,
+    /// Pre-built rootfs.erofs for local boot-assets builds. When omitted, boot-assets builds rootfs locally.
+    #[arg(long, env = "BOOT_ASSETS_ROOTFS")]
+    boot_assets_rootfs: Option<PathBuf>,
 }
 
 #[derive(Args)]
 struct MacosDmgArgs {
+    /// Build a local development DMG (`ArcBox Dev.app`) that uses the development profile.
+    #[arg(long)]
+    dev: bool,
     /// Codesign identity. When omitted the app is left ad-hoc/unsigned.
     #[arg(long)]
     sign: Option<String>,
@@ -88,6 +118,18 @@ struct MacosDmgArgs {
     /// Path to the arcbox checkout (auto-discovered when unset).
     #[arg(long, env = "ARCBOX_DIR")]
     arcbox_dir: Option<PathBuf>,
+    /// Force re-download/rebuild profile resources before packaging.
+    #[arg(long)]
+    force_resources: bool,
+    /// Build boot assets from this local boot-assets checkout instead of downloading them.
+    #[arg(long, env = "BOOT_ASSETS_DIR")]
+    boot_assets_dir: Option<PathBuf>,
+    /// Kernel binary for local boot-assets builds. Auto-detected from common local paths when unset.
+    #[arg(long, env = "BOOT_ASSETS_KERNEL")]
+    boot_assets_kernel: Option<PathBuf>,
+    /// Pre-built rootfs.erofs for local boot-assets builds. When omitted, boot-assets builds rootfs locally.
+    #[arg(long, env = "BOOT_ASSETS_ROOTFS")]
+    boot_assets_rootfs: Option<PathBuf>,
     /// Sparkle appcast feed URL injected into Info.plist.
     #[arg(long, env = "SPARKLE_FEED_URL")]
     sparkle_feed_url: Option<String>,

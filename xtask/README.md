@@ -26,6 +26,7 @@ cargo xtask macos dmg --sign "Developer ID Application: …" --notarize
 | --- | --- |
 | `macos embed` | Embed arcbox Rust binaries into the app bundle. Runs from the Xcode "Embed Arcbox Binaries" build phase; env-driven (`PROJECT_DIR`, `BUILT_PRODUCTS_DIR`, `SKIP_RUST_BUILD`, …). |
 | `macos bundle` | Wrap the `arcbox-daemon` binary in a minimal signed `.app` (its own `embedded.provisionprofile` for AMFI). |
+| `macos prepare-resources` | Prepare profile resources without packaging. Use `--dev --force` to rebuild/re-download `~/.arcbox-dev`; add `--boot-assets-dir ../boot-assets` to build boot assets from a local checkout. |
 | `macos dmg` | Build `ArcBox.app`, embed assets/binaries, bundle + sign the daemon, deep-sign, package the DMG, and notarize. Injects `PostHogAPIKey`/`SentryDSN`/`SUPublicEDKey` into Info.plist. |
 | `protocol bump` | Update `arcbox.version` and regenerate the Swift protobuf client atomically. |
 | `protocol verify` | Regenerate the Swift protobuf client from `arcbox.version` and fail if checked-in generated files drift. |

@@ -111,7 +111,9 @@ class DockerTerminalSession {
         let proc = Process()
         var env = Self.sanitizedEnvironment()
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        env["DOCKER_HOST"] = "unix://\(home)/.arcbox/run/docker.sock"
+        let profile = Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String
+        let dataDir = profile?.caseInsensitiveCompare("development") == .orderedSame ? ".arcbox-dev" : ".arcbox"
+        env["DOCKER_HOST"] = "unix://\(home)/\(dataDir)/run/docker.sock"
         env["TERM"] = "xterm-256color"
         proc.environment = env
 

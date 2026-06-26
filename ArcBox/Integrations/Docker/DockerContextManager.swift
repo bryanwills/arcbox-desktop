@@ -16,7 +16,14 @@ nonisolated enum DockerContextManager {
 
     private static var arcboxSocketPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "unix://\(home)/.arcbox/run/docker.sock"
+        let profile = Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String
+        let dataDir = profile?.caseInsensitiveCompare("development") == .orderedSame ? ".arcbox-dev" : ".arcbox"
+        return "unix://\(home)/\(dataDir)/run/docker.sock"
+    }
+
+    private static var arcboxContextName: String {
+        let profile = Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String
+        return profile?.caseInsensitiveCompare("development") == .orderedSame ? "arcbox-dev" : "arcbox"
     }
 
     /// Switch the Docker CLI context to use ArcBox's socket.
@@ -32,23 +39,23 @@ nonisolated enum DockerContextManager {
                 }
 
                 // Always save the current context so we can restore it on quit,
-                // even if it's already "arcbox" (user may have set it intentionally).
+                // even if it's already ArcBox's context (user may have set it intentionally).
                 if let previousContext = config["currentContext"] as? String {
                     UserDefaults.standard.set(previousContext, forKey: previousContextKey)
                 }
 
-                // Ensure the arcbox context exists in Docker's context store
+                // Ensure the ArcBox context exists in Docker's context store.
                 guard createArcBoxContext() else {
-                    logger.error("Skipping context switch — failed to create arcbox context")
+                    logger.error("Skipping context switch — failed to create ArcBox context")
                     return
                 }
 
                 // Set the current context
                 var updatedConfig = config
-                updatedConfig["currentContext"] = "arcbox"
+                updatedConfig["currentContext"] = arcboxContextName
                 try writeConfig(updatedConfig)
 
-                logger.info("Switched Docker context to arcbox")
+                logger.info("Switched Docker context to \(arcboxContextName, privacy: .public)")
             } catch {
                 logger.error("Failed to switch Docker context: \(error.localizedDescription, privacy: .public)")
             }
@@ -79,14 +86,14 @@ nonisolated enum DockerContextManager {
         }
     }
 
-    /// Creates the arcbox context in Docker's context meta store.
+    /// Creates the ArcBox context in Docker's context meta store.
     /// Returns true if the context exists (created or already present), false on failure.
     @discardableResult
     private static func createArcBoxContext() -> Bool {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [
-            "docker", "context", "create", "arcbox",
+            "docker", "context", "create", arcboxContextName,
             "--docker", "host=\(arcboxSocketPath)",
             "--description", "ArcBox Desktop",
         ]

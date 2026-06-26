@@ -5,7 +5,8 @@ import ServiceManagement
 /// Manages the arcbox daemon lifecycle via SMAppService (LaunchAgent) and
 /// observes readiness via gRPC `WatchSetupStatus` stream.
 ///
-/// The daemon is bundled as `Contents/Frameworks/com.arcboxlabs.desktop.daemon.app`
+/// The daemon is bundled under `Contents/Frameworks/` using the app profile's
+/// launchd label (`com.arcboxlabs.desktop.daemon` or `...dev.daemon`).
 /// and managed by launchd. `KeepAlive` in the plist ensures automatic restart on crash.
 @Observable
 @MainActor
@@ -43,7 +44,35 @@ public final class DaemonManager {
     /// Timestamp of the last message received from the gRPC setup status stream.
     public internal(set) var lastMessageTime: Date?
 
-    nonisolated static let daemonPlistName = "com.arcboxlabs.desktop.daemon.plist"
+    nonisolated static var isDevelopmentProfile: Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String)?
+            .caseInsensitiveCompare("development") == .orderedSame
+    }
+
+    nonisolated static var arcboxProfile: String {
+        isDevelopmentProfile ? "development" : "production"
+    }
+
+    nonisolated static var dataDirectoryName: String {
+        isDevelopmentProfile ? ".arcbox-dev" : ".arcbox"
+    }
+
+    nonisolated static var daemonLabel: String {
+        isDevelopmentProfile ? "com.arcboxlabs.desktop.dev.daemon" : "com.arcboxlabs.desktop.daemon"
+    }
+
+    nonisolated static var daemonPlistName: String {
+        "\(daemonLabel).plist"
+    }
+
+    nonisolated static var profileArguments: [String] {
+        ["--profile", arcboxProfile]
+    }
+
+    nonisolated static var profileDataDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(dataDirectoryName)
+    }
+
     nonisolated var daemonService: SMAppService {
         SMAppService.agent(plistName: Self.daemonPlistName)
     }

@@ -6,9 +6,10 @@ extension DaemonManager {
 
     /// Path to the daemon binary inside the app bundle.
     nonisolated private static var daemonBinaryPath: String {
-        Bundle.main.bundleURL
+        let daemonLabel = Self.daemonLabel
+        return Bundle.main.bundleURL
             .appendingPathComponent(
-                "Contents/Frameworks/com.arcboxlabs.desktop.daemon.app/Contents/MacOS/com.arcboxlabs.desktop.daemon"
+                "Contents/Frameworks/\(daemonLabel).app/Contents/MacOS/\(daemonLabel)"
             ).path
     }
 

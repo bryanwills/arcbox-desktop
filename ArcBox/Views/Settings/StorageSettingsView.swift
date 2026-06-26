@@ -24,7 +24,9 @@ struct StorageSettingsView: View {
 
     private static var arcboxDataPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.arcbox"
+        let profile = Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String
+        let dataDir = profile?.caseInsensitiveCompare("development") == .orderedSame ? ".arcbox-dev" : ".arcbox"
+        return "\(home)/\(dataDir)"
     }
 
     var body: some View {

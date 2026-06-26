@@ -16,9 +16,85 @@ use xtask_kit::process;
 
 use crate::MacosBundleArgs;
 
-const BUNDLE_ID: &str = "com.arcboxlabs.desktop.daemon";
-const BUNDLE_NAME: &str = "ArcBox Daemon";
-const EXECUTABLE_NAME: &str = "com.arcboxlabs.desktop.daemon";
+/// Runtime profile identity for the bundled daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleProfile {
+    /// Production app identity and `~/.arcbox` runtime profile.
+    Production,
+    /// Development app identity and `~/.arcbox-dev` runtime profile.
+    Development,
+}
+
+impl BundleProfile {
+    pub fn from_dev_flag(dev: bool) -> Self {
+        if dev {
+            Self::Development
+        } else {
+            Self::Production
+        }
+    }
+
+    pub fn from_environment() -> Self {
+        let arcbox_profile = std::env::var("ARCBOX_PROFILE").unwrap_or_default();
+        if arcbox_profile.eq_ignore_ascii_case("development")
+            || arcbox_profile.eq_ignore_ascii_case("dev")
+        {
+            Self::Development
+        } else {
+            Self::Production
+        }
+    }
+
+    pub const fn daemon_label(self) -> &'static str {
+        match self {
+            Self::Production => "com.arcboxlabs.desktop.daemon",
+            Self::Development => "com.arcboxlabs.desktop.dev.daemon",
+        }
+    }
+
+    /// Entitlements used to sign the daemon for this runtime profile.
+    pub const fn daemon_entitlements_file(self) -> &'static str {
+        match self {
+            Self::Production => "arcbox.entitlements",
+            Self::Development => "arcbox.dev.entitlements",
+        }
+    }
+
+    pub const fn bundle_name(self) -> &'static str {
+        match self {
+            Self::Production => "ArcBox Daemon",
+            Self::Development => "ArcBox Dev Daemon",
+        }
+    }
+
+    pub const fn arcbox_profile(self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            Self::Development => "development",
+        }
+    }
+
+    pub const fn app_name(self) -> &'static str {
+        match self {
+            Self::Production => "ArcBox",
+            Self::Development => "ArcBox Dev",
+        }
+    }
+
+    pub const fn product_bundle_identifier(self) -> &'static str {
+        match self {
+            Self::Production => "com.arcboxlabs.desktop",
+            Self::Development => "com.arcboxlabs.desktop.dev",
+        }
+    }
+
+    pub const fn data_dir_name(self) -> &'static str {
+        match self {
+            Self::Production => ".arcbox",
+            Self::Development => ".arcbox-dev",
+        }
+    }
+}
 
 const REQUIRED_ENTITLEMENTS: [&str; 2] = [
     "com.apple.security.virtualization",
@@ -27,6 +103,7 @@ const REQUIRED_ENTITLEMENTS: [&str; 2] = [
 
 /// Inputs for [`bundle_daemon`].
 pub struct BundleOptions<'a> {
+    pub profile: BundleProfile,
     pub daemon_binary: &'a Path,
     pub output_dir: &'a Path,
     pub provisioning_profile: Option<&'a Path>,
@@ -35,11 +112,11 @@ pub struct BundleOptions<'a> {
     pub version: &'a str,
 }
 
-fn write_info_plist(contents: &Path, version: &str) -> Result<()> {
+fn write_info_plist(contents: &Path, profile: BundleProfile, version: &str) -> Result<()> {
     let mut dict = plist::Dictionary::new();
-    dict.insert("CFBundleIdentifier".into(), BUNDLE_ID.into());
-    dict.insert("CFBundleExecutable".into(), EXECUTABLE_NAME.into());
-    dict.insert("CFBundleName".into(), BUNDLE_NAME.into());
+    dict.insert("CFBundleIdentifier".into(), profile.daemon_label().into());
+    dict.insert("CFBundleExecutable".into(), profile.daemon_label().into());
+    dict.insert("CFBundleName".into(), profile.bundle_name().into());
     dict.insert("CFBundlePackageType".into(), "APPL".into());
     dict.insert("CFBundleInfoDictionaryVersion".into(), "6.0".into());
     dict.insert("CFBundleVersion".into(), version.into());
@@ -59,7 +136,8 @@ fn write_info_plist(contents: &Path, version: &str) -> Result<()> {
 
 /// Create the daemon `.app` bundle and return its path.
 pub fn bundle_daemon(opts: &BundleOptions<'_>) -> Result<PathBuf> {
-    let bundle_dir = opts.output_dir.join(format!("{EXECUTABLE_NAME}.app"));
+    let daemon_label = opts.profile.daemon_label();
+    let bundle_dir = opts.output_dir.join(format!("{daemon_label}.app"));
     let contents = bundle_dir.join("Contents");
     let macos_dir = contents.join("MacOS");
 
@@ -71,7 +149,7 @@ pub fn bundle_daemon(opts: &BundleOptions<'_>) -> Result<PathBuf> {
         .with_context(|| format!("creating {}", macos_dir.display()))?;
 
     // 1. Copy daemon binary.
-    let dest_binary = macos_dir.join(EXECUTABLE_NAME);
+    let dest_binary = macos_dir.join(daemon_label);
     std::fs::copy(opts.daemon_binary, &dest_binary).with_context(|| {
         format!(
             "copying {} -> {}",
@@ -84,7 +162,7 @@ pub fn bundle_daemon(opts: &BundleOptions<'_>) -> Result<PathBuf> {
     println!("  Copied daemon binary → {}", dest_binary.display());
 
     // 2. Info.plist + PkgInfo.
-    write_info_plist(&contents, opts.version)?;
+    write_info_plist(&contents, opts.profile, opts.version)?;
     std::fs::write(contents.join("PkgInfo"), "APPL????").context("writing PkgInfo")?;
     println!("  Created Info.plist (version={})", opts.version);
 
@@ -150,6 +228,7 @@ pub fn run(args: MacosBundleArgs) -> Result<()> {
     let bundle = bundle_daemon(&BundleOptions {
         daemon_binary: &args.daemon_binary,
         output_dir: &args.output_dir,
+        profile: BundleProfile::from_dev_flag(args.dev),
         provisioning_profile: args.provisioning_profile.as_deref(),
         sign_identity: args.sign.as_deref(),
         entitlements: args.entitlements.as_deref(),

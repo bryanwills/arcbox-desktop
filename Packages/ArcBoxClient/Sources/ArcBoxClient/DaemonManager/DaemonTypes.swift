@@ -27,7 +27,7 @@ public enum DaemonSetupPhase: Sendable, Equatable {
     /// Fatal startup error; the daemon gave up. See `setupMessage` for details.
     case failed
 
-    /// Whether the Docker API socket (`~/.arcbox/run/docker.sock`) is expected
+    /// Whether the profile's Docker API socket is expected
     /// to be available at this phase. This is true once the daemon has finished
     /// its full setup or is running in a degraded state.
     ///

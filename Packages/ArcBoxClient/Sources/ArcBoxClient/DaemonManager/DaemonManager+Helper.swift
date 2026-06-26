@@ -47,7 +47,9 @@ extension DaemonManager {
         func shellQuote(_ s: String) -> String {
             "'\(s.replacingOccurrences(of: "'", with: "'\\''"))'"
         }
-        let cmd = "\(shellQuote(abctl)) _install --no-daemon --no-shell --helper-path \(shellQuote(helper))"
+        let profileArgs = Self.profileArguments.map(shellQuote).joined(separator: " ")
+        let cmd =
+            "\(shellQuote(abctl)) \(profileArgs) _install --no-daemon --no-shell --helper-path \(shellQuote(helper))"
         let script = "do shell script \"\(cmd)\" with administrator privileges"
 
         let result = await Task.detached { () -> Bool in
@@ -73,14 +75,14 @@ extension DaemonManager {
     /// Run `abctl setup install` as the current user to set up shell
     /// integration (PATH symlinks, completions, profile injection),
     /// then copy all bundled completions from the app bundle into
-    /// `~/.arcbox/completions/` so that Docker completions etc. are
+    /// the selected profile completions directory so that Docker completions etc. are
     /// available alongside `_abctl`.
     /// Non-critical — failures are logged but do not block startup.
     func installShellIntegration(abctl: String) async {
         await Task.detached { @Sendable in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: abctl)
-            process.arguments = ["setup", "install"]
+            process.arguments = Self.profileArguments + ["setup", "install"]
             do {
                 try process.run()
                 process.waitUntilExit()
@@ -101,7 +103,7 @@ extension DaemonManager {
 
     /// Copy all shell completions bundled in
     /// `Contents/Resources/completions/{bash,zsh,fish}/` into the
-    /// user's `~/.arcbox/completions/` directory, overwriting any
+    /// user's selected profile completions directory, overwriting any
     /// existing files so bundled completion updates propagate.
     func installBundledCompletions() async {
         let bundleURL = Bundle.main.bundleURL
@@ -115,8 +117,8 @@ extension DaemonManager {
                 return
             }
 
-            let userCompletions = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".arcbox/completions")
+            let userCompletions = DaemonManager.profileDataDirectory
+                .appendingPathComponent("completions")
 
             for shell in ["bash", "zsh", "fish"] {
                 let srcDir = bundledCompletions.appendingPathComponent(shell)

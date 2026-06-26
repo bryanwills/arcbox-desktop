@@ -23,9 +23,8 @@ extension DaemonManager {
         state = .starting
 
         // Ensure data directory exists so the daemon can create sockets and state.
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
         try? FileManager.default.createDirectory(
-            atPath: "\(home)/.arcbox/run", withIntermediateDirectories: true)
+            at: Self.profileDataDirectory.appendingPathComponent("run"), withIntermediateDirectories: true)
 
         // ABXD-54: Signature + entitlements are now verified by the orchestrator
         // via verifyDaemonBinary() before enableDaemon() is called.

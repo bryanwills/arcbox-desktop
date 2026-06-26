@@ -15,7 +15,9 @@ public struct DockerClient: Sendable {
     /// Default Unix socket path for the Docker daemon (ArcBox runtime).
     public static let defaultSocketPath: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.arcbox/run/docker.sock"
+        let profile = Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String
+        let dataDir = profile?.caseInsensitiveCompare("development") == .orderedSame ? ".arcbox-dev" : ".arcbox"
+        return "\(home)/\(dataDir)/run/docker.sock"
     }()
 
     /// Default server URL matching the OpenAPI spec base path.

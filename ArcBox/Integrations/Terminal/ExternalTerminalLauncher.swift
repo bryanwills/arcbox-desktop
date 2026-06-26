@@ -10,7 +10,9 @@ enum ExternalTerminalLauncher {
     /// The Docker socket environment variable value used by ArcBox.
     private static var dockerHost: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "unix://\(home)/.arcbox/run/docker.sock"
+        let profile = Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String
+        let dataDir = profile?.caseInsensitiveCompare("development") == .orderedSame ? ".arcbox-dev" : ".arcbox"
+        return "unix://\(home)/\(dataDir)/run/docker.sock"
     }
 
     /// Open an external terminal with an optional docker exec command.

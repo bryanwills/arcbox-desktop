@@ -17,12 +17,12 @@ use xtask_kit::apple::{self, CodesignOptions};
 use xtask_kit::dmg::{self, CreateDmgOptions};
 use xtask_kit::{github_actions, process, repo};
 
-use super::bundle::{self, BundleOptions};
-use crate::MacosDmgArgs;
+use super::bundle::{self, BundleOptions, BundleProfile};
 use crate::support::fs as xfs;
+use crate::{MacosDmgArgs, MacosPrepareResourcesArgs};
 
-const APP_NAME: &str = "ArcBox";
-const DAEMON_NAME: &str = "com.arcboxlabs.desktop.daemon";
+const SCHEME_NAME: &str = "ArcBox";
+const PRODUCTION_DAEMON_NAME: &str = "com.arcboxlabs.desktop.daemon";
 const DOCKER_TOOLS: [&str; 4] = [
     "docker",
     "docker-buildx",
@@ -30,8 +30,21 @@ const DOCKER_TOOLS: [&str; 4] = [
     "docker-credential-osxkeychain",
 ];
 
+const HOST_ARCH: &str = "arm64";
+
+struct ResourceOptions<'a> {
+    force: bool,
+    boot_assets_dir: Option<&'a Path>,
+    boot_assets_kernel: Option<&'a Path>,
+    boot_assets_rootfs: Option<&'a Path>,
+}
+
 fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
+}
+
+fn profile_home(profile: BundleProfile) -> PathBuf {
+    home().join(profile.data_dir_name())
 }
 
 /// Sign a binary with hardened runtime; no-op when `identity` is empty.
@@ -103,6 +116,7 @@ fn git_commit_count(repo: &Path) -> Result<String> {
 fn build_swift_app(
     desktop_repo: &Path,
     arcbox_dir: &Path,
+    profile: BundleProfile,
     build_number: &str,
     sign_identity: &str,
 ) -> Result<PathBuf> {
@@ -114,7 +128,7 @@ fn build_swift_app(
     cmd.arg("build")
         .arg("-project")
         .arg(desktop_repo.join("ArcBox.xcodeproj"))
-        .args(["-scheme", APP_NAME, "-configuration", "Release"])
+        .args(["-scheme", SCHEME_NAME, "-configuration", "Release"])
         .arg("-showBuildTimingSummary")
         .arg("-derivedDataPath")
         .arg(&derived_data)
@@ -124,6 +138,15 @@ fn build_swift_app(
         .arg("ARCHS=arm64")
         .arg(format!("ARCBOX_DIR={}", arcbox_dir.display()))
         .arg(format!("CURRENT_PROJECT_VERSION={build_number}"));
+    if profile == BundleProfile::Development {
+        cmd.arg(format!(
+            "ARCBOX_PRODUCT_BUNDLE_IDENTIFIER={}",
+            profile.product_bundle_identifier()
+        ))
+        .arg(format!("ARCBOX_PRODUCT_NAME={}", profile.app_name()))
+        .arg(format!("ARCBOX_APP_DISPLAY_NAME={}", profile.app_name()))
+        .arg(format!("ARCBOX_PROFILE={}", profile.arcbox_profile()));
+    }
     if !sign_identity.is_empty() {
         cmd.arg(format!("CODE_SIGN_IDENTITY={sign_identity}"))
             .arg("CODE_SIGN_STYLE=Manual");
@@ -169,6 +192,13 @@ fn inject_telemetry_keys(app_bundle: &Path, args: &MacosDmgArgs) -> Result<()> {
     Ok(())
 }
 
+fn inject_profile_key(app_bundle: &Path, profile: BundleProfile) -> Result<()> {
+    let plist = app_bundle.join("Contents").join("Info.plist");
+    apple::set_plist_string(&plist, "ArcBoxProfile", profile.arcbox_profile())?;
+    println!("  ArcBoxProfile: {}", profile.arcbox_profile());
+    Ok(())
+}
+
 fn read_boot_version(lock_file: &Path) -> Result<String> {
     let text = std::fs::read_to_string(lock_file)
         .with_context(|| format!("reading {}", lock_file.display()))?;
@@ -190,7 +220,257 @@ fn read_boot_version(lock_file: &Path) -> Result<String> {
     bail!("cannot parse boot version from {}", lock_file.display())
 }
 
-fn embed_boot_assets(app_bundle: &Path, arcbox_dir: &Path) -> Result<()> {
+fn run_abctl_profile_command(
+    abctl: &Path,
+    profile: BundleProfile,
+    args: &[&str],
+    description: &str,
+) -> Result<()> {
+    println!(
+        "  Running abctl --profile {} {description}...",
+        profile.arcbox_profile()
+    );
+    let status = Command::new(abctl)
+        .args(["--profile", profile.arcbox_profile()])
+        .args(args)
+        .status()
+        .with_context(|| format!("running abctl {description}"))?;
+    if !status.success() {
+        bail!("abctl {description} failed");
+    }
+    Ok(())
+}
+
+fn run_abctl_profile_command_owned(
+    abctl: &Path,
+    profile: BundleProfile,
+    args: &[String],
+    description: &str,
+) -> Result<()> {
+    println!(
+        "  Running abctl --profile {} {description}...",
+        profile.arcbox_profile()
+    );
+    let status = Command::new(abctl)
+        .args(["--profile", profile.arcbox_profile()])
+        .args(args)
+        .status()
+        .with_context(|| format!("running abctl {description}"))?;
+    if !status.success() {
+        bail!("abctl {description} failed");
+    }
+    Ok(())
+}
+
+fn build_boot_assets_tool(boot_assets_dir: &Path) -> Result<PathBuf> {
+    println!("  Building local boot-assets CLI...");
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "--release",
+            "--features",
+            "build",
+            "--no-default-features",
+        ])
+        .current_dir(boot_assets_dir)
+        .status()
+        .context("building local boot-assets CLI")?;
+    if !status.success() {
+        bail!("cargo build for local boot-assets failed");
+    }
+
+    let tool = boot_assets_dir
+        .join("target")
+        .join("release")
+        .join("boot-assets");
+    if !tool.is_file() {
+        bail!("boot-assets CLI was not built at {}", tool.display());
+    }
+    Ok(tool)
+}
+
+fn resolve_boot_assets_kernel(
+    desktop_repo: &Path,
+    boot_assets_dir: &Path,
+    explicit: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(kernel) = explicit {
+        if kernel.is_file() {
+            return Ok(kernel.to_path_buf());
+        }
+        bail!("boot-assets kernel not found: {}", kernel.display());
+    }
+
+    let candidates = [
+        boot_assets_dir.join("build").join("kernel-arm64"),
+        boot_assets_dir.join("build").join("kernel"),
+        boot_assets_dir
+            .parent()
+            .map(|p| p.join("kernel").join("output").join("kernel-arm64"))
+            .unwrap_or_default(),
+        desktop_repo
+            .parent()
+            .map(|p| p.join("kernel").join("output").join("kernel-arm64"))
+            .unwrap_or_default(),
+    ];
+    candidates
+        .into_iter()
+        .find(|p| p.is_file())
+        .with_context(|| {
+            format!(
+                "cannot find a kernel for local boot-assets build; pass --boot-assets-kernel or place one under {}/build/kernel-arm64",
+                boot_assets_dir.display()
+            )
+        })
+}
+
+fn unpack_boot_assets_tarball(tarball: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
+    let status = Command::new("/usr/bin/tar")
+        .args(["-xzf"])
+        .arg(tarball)
+        .arg("-C")
+        .arg(dest)
+        .status()
+        .with_context(|| format!("extracting {}", tarball.display()))?;
+    if !status.success() {
+        bail!("extracting {} failed", tarball.display());
+    }
+    for name in ["manifest.json", "kernel", "rootfs.erofs"] {
+        let path = dest.join(name);
+        if !path.is_file() {
+            bail!(
+                "local boot-assets tarball did not contain {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn boot_cache_ready(cache_dir: &Path) -> bool {
+    cache_dir.join("manifest.json").is_file()
+        && cache_dir.join("kernel").is_file()
+        && cache_dir.join("rootfs.erofs").is_file()
+}
+
+fn build_local_boot_assets(
+    desktop_repo: &Path,
+    arcbox_dir: &Path,
+    profile: BundleProfile,
+    opts: &ResourceOptions<'_>,
+) -> Result<()> {
+    let Some(boot_assets_dir) = opts.boot_assets_dir else {
+        return Ok(());
+    };
+    println!("--- Building local boot-assets ---");
+    if !boot_assets_dir.join("Cargo.toml").is_file() {
+        bail!(
+            "boot-assets checkout not found: {}",
+            boot_assets_dir.display()
+        );
+    }
+
+    let version = read_boot_version(&arcbox_dir.join("assets.lock"))?;
+    let cache_dir = profile_home(profile).join("boot").join(&version);
+    if !opts.force && boot_cache_ready(&cache_dir) {
+        println!(
+            "  Local boot-assets already prepared at {}",
+            cache_dir.display()
+        );
+        return Ok(());
+    }
+
+    let output_dir = boot_assets_dir.join("dist").join(HOST_ARCH);
+    if opts.force && output_dir.exists() {
+        std::fs::remove_dir_all(&output_dir)
+            .with_context(|| format!("removing {}", output_dir.display()))?;
+    }
+
+    let tool = build_boot_assets_tool(boot_assets_dir)?;
+    let kernel =
+        resolve_boot_assets_kernel(desktop_repo, boot_assets_dir, opts.boot_assets_kernel)?;
+    let mut args = vec![
+        "build".to_string(),
+        "release".to_string(),
+        "--version".to_string(),
+        version.clone(),
+        "--kernel".to_string(),
+        kernel.display().to_string(),
+        "--arch".to_string(),
+        HOST_ARCH.to_string(),
+        "--output-dir".to_string(),
+        output_dir.display().to_string(),
+        "--source-repo".to_string(),
+        "local/boot-assets".to_string(),
+    ];
+    if let Some(rootfs) = opts.boot_assets_rootfs {
+        if !rootfs.is_file() {
+            bail!("boot-assets rootfs not found: {}", rootfs.display());
+        }
+        args.push("--rootfs".to_string());
+        args.push(rootfs.display().to_string());
+    }
+
+    let status = Command::new(&tool)
+        .args(&args)
+        .current_dir(boot_assets_dir)
+        .status()
+        .context("building local boot assets")?;
+    if !status.success() {
+        bail!("local boot-assets build failed");
+    }
+
+    let tarball = output_dir.join(format!("boot-assets-{HOST_ARCH}-v{version}.tar.gz"));
+    if !tarball.is_file() {
+        bail!("local boot-assets tarball not found: {}", tarball.display());
+    }
+    if cache_dir.exists() {
+        std::fs::remove_dir_all(&cache_dir)
+            .with_context(|| format!("removing {}", cache_dir.display()))?;
+    }
+    unpack_boot_assets_tarball(&tarball, &cache_dir)?;
+    println!("  Installed local boot-assets → {}", cache_dir.display());
+    Ok(())
+}
+
+fn prepare_profile_resources(
+    desktop_repo: &Path,
+    arcbox_dir: &Path,
+    profile: BundleProfile,
+    opts: &ResourceOptions<'_>,
+) -> Result<()> {
+    println!("--- Preparing profile resources ---");
+    let abctl = arcbox_dir.join("target").join("release").join("abctl");
+    if !abctl.is_file() {
+        bail!(
+            "abctl not found at {}. The Xcode build should have built local arcbox binaries first.",
+            abctl.display()
+        );
+    }
+
+    if opts.force {
+        let runtime_dir = profile_home(profile).join("runtime");
+        if runtime_dir.exists() {
+            std::fs::remove_dir_all(&runtime_dir)
+                .with_context(|| format!("removing {}", runtime_dir.display()))?;
+        }
+    }
+
+    if opts.boot_assets_dir.is_some() {
+        build_local_boot_assets(desktop_repo, arcbox_dir, profile, opts)?;
+    } else {
+        let mut boot_args = vec!["boot".to_string(), "prefetch".to_string()];
+        if opts.force {
+            boot_args.push("--force".to_string());
+        }
+        run_abctl_profile_command_owned(&abctl, profile, &boot_args, "boot prefetch")?;
+    }
+    run_abctl_profile_command(&abctl, profile, &["docker", "setup"], "docker setup")?;
+    Ok(())
+}
+
+fn embed_boot_assets(app_bundle: &Path, arcbox_dir: &Path, profile: BundleProfile) -> Result<()> {
     println!("--- Embedding boot-assets ---");
     let lock_file = arcbox_dir.join("assets.lock");
     let boot_version = read_boot_version(&lock_file)?;
@@ -201,7 +481,7 @@ fn embed_boot_assets(app_bundle: &Path, arcbox_dir: &Path) -> Result<()> {
             .join("target")
             .join("boot-assets")
             .join(&boot_version),
-        home().join(".arcbox").join("boot").join(&boot_version),
+        profile_home(profile).join("boot").join(&boot_version),
     ]
     .into_iter()
     .find(|c| c.join("manifest.json").is_file());
@@ -264,9 +544,13 @@ fn embed_agent(app_bundle: &Path, arcbox_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn embed_docker_tools(app_bundle: &Path, sign_identity: &str) -> Result<()> {
+fn embed_docker_tools(
+    app_bundle: &Path,
+    sign_identity: &str,
+    profile: BundleProfile,
+) -> Result<()> {
     println!("--- Embedding Docker CLI tools ---");
-    let src_dir = home().join(".arcbox").join("runtime").join("bin");
+    let src_dir = profile_home(profile).join("runtime").join("bin");
     let dest_dir = app_bundle.join("Contents").join("MacOS").join("xbin");
     std::fs::create_dir_all(&dest_dir)?;
     let mut count = 0;
@@ -287,28 +571,11 @@ fn embed_docker_tools(app_bundle: &Path, sign_identity: &str) -> Result<()> {
     Ok(())
 }
 
-fn embed_runtime(app_bundle: &Path, arcbox_dir: &Path, sign_identity: &str) -> Result<()> {
+fn embed_runtime(app_bundle: &Path, sign_identity: &str, profile: BundleProfile) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    println!("--- Preparing and embedding runtime binaries ---");
+    println!("--- Embedding runtime binaries ---");
 
-    let cli_bin = arcbox_dir.join("target").join("release").join("abctl");
-    if cli_bin.is_file() {
-        println!("  Running abctl boot prefetch...");
-        let status = Command::new(&cli_bin)
-            .args(["boot", "prefetch"])
-            .status()
-            .context("running abctl boot prefetch")?;
-        if !status.success() {
-            bail!("abctl boot prefetch failed");
-        }
-    } else {
-        println!(
-            "  Warning: abctl not found at {}, skipping prefetch",
-            cli_bin.display()
-        );
-    }
-
-    let runtime_src = home().join(".arcbox").join("runtime");
+    let runtime_src = profile_home(profile).join("runtime");
     let runtime_dest = app_bundle
         .join("Contents")
         .join("Resources")
@@ -434,17 +701,19 @@ fn embed_pstramp(app_bundle: &Path, arcbox_dir: &Path, sign_identity: &str) -> R
 fn bundle_daemon_step(
     app_bundle: &Path,
     arcbox_dir: &Path,
+    profile: BundleProfile,
     version: &str,
     sign_identity: &str,
     provisioning_profile: Option<&Path>,
 ) -> Result<()> {
     println!("--- Bundling daemon ---");
+    let daemon_name = profile.daemon_label();
     let frameworks = app_bundle.join("Contents").join("Frameworks");
     let already_bundled = frameworks
-        .join(format!("{DAEMON_NAME}.app"))
+        .join(format!("{daemon_name}.app"))
         .join("Contents")
         .join("MacOS")
-        .join(DAEMON_NAME);
+        .join(daemon_name);
 
     // Locate the daemon binary from possible locations; if Xcode already
     // bundled it, copy the binary out before bundle_daemon wipes the bundle.
@@ -459,7 +728,7 @@ fn bundle_daemon_step(
         let helpers = app_bundle
             .join("Contents")
             .join("Helpers")
-            .join(DAEMON_NAME);
+            .join(daemon_name);
         let target_release = arcbox_dir
             .join("target")
             .join("release")
@@ -473,8 +742,11 @@ fn bundle_daemon_step(
         }
     };
 
-    let entitlements = arcbox_dir.join("bundle").join("arcbox.entitlements");
+    let entitlements = arcbox_dir
+        .join("bundle")
+        .join(profile.daemon_entitlements_file());
     bundle::bundle_daemon(&BundleOptions {
+        profile,
         daemon_binary: &daemon_src,
         output_dir: &frameworks,
         provisioning_profile,
@@ -488,7 +760,7 @@ fn bundle_daemon_step(
     let legacy = app_bundle
         .join("Contents")
         .join("Helpers")
-        .join(DAEMON_NAME);
+        .join(daemon_name);
     let _ = std::fs::remove_file(&legacy);
     let _ = std::fs::remove_dir(app_bundle.join("Contents").join("Helpers"));
     Ok(())
@@ -497,20 +769,22 @@ fn bundle_daemon_step(
 fn sign_app_bundle(
     app_bundle: &Path,
     desktop_repo: &Path,
+    profile: BundleProfile,
     sign_identity: &str,
     build_dir: &Path,
 ) -> Result<()> {
     println!("--- Signing app bundle ---");
     let sh = process::shell()?;
+    let daemon_name = profile.daemon_label();
     let daemon_bundle = app_bundle
         .join("Contents")
         .join("Frameworks")
-        .join(format!("{DAEMON_NAME}.app"));
+        .join(format!("{daemon_name}.app"));
 
     // Stash daemon bundle to preserve its signature + provisioning profile.
     let stash_dir = if daemon_bundle.is_dir() {
         let dir = tempfile::tempdir_in(build_dir).context("creating stash dir")?;
-        let stashed = dir.path().join(format!("{DAEMON_NAME}.app"));
+        let stashed = dir.path().join(format!("{daemon_name}.app"));
         std::fs::rename(&daemon_bundle, &stashed).context("stashing daemon bundle")?;
         println!("  Stashed daemon bundle to preserve signature + profile");
         Some((dir, stashed))
@@ -562,28 +836,125 @@ fn sign_app_bundle(
     Ok(())
 }
 
-fn create_dmg(app_bundle: &Path, dmg_path: &Path) -> Result<()> {
+fn create_dmg(app_bundle: &Path, dmg_path: &Path, profile: BundleProfile) -> Result<()> {
     println!("--- Creating DMG ---");
-    let options = CreateDmgOptions::new(APP_NAME, app_bundle, dmg_path);
+    let options = CreateDmgOptions::new(profile.app_name(), app_bundle, dmg_path);
     dmg::create(&options)
+}
+
+fn rewrite_launch_agent_plist(app_bundle: &Path, profile: BundleProfile) -> Result<()> {
+    let launch_agents = app_bundle
+        .join("Contents")
+        .join("Library")
+        .join("LaunchAgents");
+    let production_plist = launch_agents.join(format!("{PRODUCTION_DAEMON_NAME}.plist"));
+    let daemon_name = profile.daemon_label();
+    let profile_plist = launch_agents.join(format!("{daemon_name}.plist"));
+
+    if !production_plist.is_file() {
+        return Ok(());
+    }
+
+    if profile == BundleProfile::Development {
+        std::fs::rename(&production_plist, &profile_plist).with_context(|| {
+            format!(
+                "renaming {} -> {}",
+                production_plist.display(),
+                profile_plist.display()
+            )
+        })?;
+    }
+
+    let plist_path = if profile == BundleProfile::Development {
+        &profile_plist
+    } else {
+        &production_plist
+    };
+
+    let mut value = plist::Value::from_file(plist_path)
+        .with_context(|| format!("reading {}", plist_path.display()))?;
+    let dict = value
+        .as_dictionary_mut()
+        .context("LaunchAgent plist root is not a dictionary")?;
+    dict.insert("Label".into(), daemon_name.into());
+    dict.insert(
+        "BundleProgram".into(),
+        format!("Contents/Frameworks/{daemon_name}.app/Contents/MacOS/{daemon_name}").into(),
+    );
+    dict.insert(
+        "ProgramArguments".into(),
+        plist::Value::Array(vec![
+            daemon_name.into(),
+            "--profile".into(),
+            profile.arcbox_profile().into(),
+            "--docker-integration".into(),
+        ]),
+    );
+    dict.insert(
+        "StandardOutPath".into(),
+        format!("/tmp/{daemon_name}.stdout.log").into(),
+    );
+    dict.insert(
+        "StandardErrorPath".into(),
+        format!("/tmp/{daemon_name}.stderr.log").into(),
+    );
+    value
+        .to_file_xml(plist_path)
+        .with_context(|| format!("writing {}", plist_path.display()))?;
+    Ok(())
+}
+
+pub fn prepare_resources_command(args: MacosPrepareResourcesArgs) -> Result<()> {
+    let desktop_repo = desktop_repo()?;
+    let arcbox_dir = resolve_arcbox_dir(&desktop_repo, args.arcbox_dir.as_deref())?;
+    let profile = BundleProfile::from_dev_flag(args.dev);
+    let resource_options = ResourceOptions {
+        force: args.force,
+        boot_assets_dir: args.boot_assets_dir.as_deref(),
+        boot_assets_kernel: args.boot_assets_kernel.as_deref(),
+        boot_assets_rootfs: args.boot_assets_rootfs.as_deref(),
+    };
+
+    println!("=== Preparing ArcBox resources ===");
+    println!("  Desktop repo : {}", desktop_repo.display());
+    println!("  Arcbox dir   : {}", arcbox_dir.display());
+    println!("  Profile      : {}", profile.arcbox_profile());
+    println!("  Force        : {}", args.force);
+    if let Some(dir) = args.boot_assets_dir.as_deref() {
+        println!("  Boot assets  : {}", dir.display());
+    }
+
+    prepare_profile_resources(&desktop_repo, &arcbox_dir, profile, &resource_options)
 }
 
 pub fn run(args: MacosDmgArgs) -> Result<()> {
     let desktop_repo = desktop_repo()?;
     let arcbox_dir = resolve_arcbox_dir(&desktop_repo, args.arcbox_dir.as_deref())?;
+    let profile = BundleProfile::from_dev_flag(args.dev);
+    let resource_options = ResourceOptions {
+        force: args.force_resources,
+        boot_assets_dir: args.boot_assets_dir.as_deref(),
+        boot_assets_kernel: args.boot_assets_kernel.as_deref(),
+        boot_assets_rootfs: args.boot_assets_rootfs.as_deref(),
+    };
     let sign_identity = args.sign.clone().unwrap_or_default();
 
     let version = read_version(&desktop_repo, args.version.as_deref())?;
     let build_number = git_commit_count(&desktop_repo)?;
 
     let build_dir = arcbox_dir.join("target").join("dmg-build");
-    let app_bundle = build_dir.join(format!("{APP_NAME}.app"));
-    let dmg_name = format!("ArcBox-{version}-arm64");
+    let app_bundle = build_dir.join(format!("{}.app", profile.app_name()));
+    let dmg_name = if profile == BundleProfile::Development {
+        format!("ArcBox-Dev-{version}-arm64")
+    } else {
+        format!("ArcBox-{version}-arm64")
+    };
     let dmg_path = arcbox_dir.join("target").join(format!("{dmg_name}.dmg"));
 
     println!("=== Building ArcBox ===");
     println!("  Desktop repo : {}", desktop_repo.display());
     println!("  Arcbox dir   : {}", arcbox_dir.display());
+    println!("  Profile      : {}", profile.arcbox_profile());
     println!("  Version      : {version}");
     println!("  Build number : {build_number}");
     println!(
@@ -597,7 +968,13 @@ pub fn run(args: MacosDmgArgs) -> Result<()> {
     println!("  Notarize     : {}", args.notarize);
 
     // 1. Build Swift app, then copy to staging.
-    let built_app = build_swift_app(&desktop_repo, &arcbox_dir, &build_number, &sign_identity)?;
+    let built_app = build_swift_app(
+        &desktop_repo,
+        &arcbox_dir,
+        profile,
+        &build_number,
+        &sign_identity,
+    )?;
     if app_bundle.exists() {
         std::fs::remove_dir_all(&app_bundle)
             .with_context(|| format!("removing {}", app_bundle.display()))?;
@@ -608,27 +985,37 @@ pub fn run(args: MacosDmgArgs) -> Result<()> {
 
     inject_sparkle_feed_url(&app_bundle, args.sparkle_feed_url.as_deref())?;
     inject_telemetry_keys(&app_bundle, &args)?;
+    inject_profile_key(&app_bundle, profile)?;
 
-    embed_boot_assets(&app_bundle, &arcbox_dir)?;
+    prepare_profile_resources(&desktop_repo, &arcbox_dir, profile, &resource_options)?;
+    embed_boot_assets(&app_bundle, &arcbox_dir, profile)?;
     embed_abctl(&app_bundle, &arcbox_dir, &sign_identity)?;
     embed_agent(&app_bundle, &arcbox_dir)?;
-    embed_docker_tools(&app_bundle, &sign_identity)?;
-    embed_runtime(&app_bundle, &arcbox_dir, &sign_identity)?;
+    embed_docker_tools(&app_bundle, &sign_identity, profile)?;
+    embed_runtime(&app_bundle, &sign_identity, profile)?;
     embed_completions(&app_bundle)?;
     embed_pstramp(&app_bundle, &arcbox_dir, &sign_identity)?;
     bundle_daemon_step(
         &app_bundle,
         &arcbox_dir,
+        profile,
         &version,
         &sign_identity,
         args.provisioning_profile.as_deref(),
     )?;
+    rewrite_launch_agent_plist(&app_bundle, profile)?;
 
     if !sign_identity.is_empty() {
-        sign_app_bundle(&app_bundle, &desktop_repo, &sign_identity, &build_dir)?;
+        sign_app_bundle(
+            &app_bundle,
+            &desktop_repo,
+            profile,
+            &sign_identity,
+            &build_dir,
+        )?;
     }
 
-    create_dmg(&app_bundle, &dmg_path)?;
+    create_dmg(&app_bundle, &dmg_path, profile)?;
     if !sign_identity.is_empty() {
         dmg::sign(&sign_identity, &dmg_path)?;
     }

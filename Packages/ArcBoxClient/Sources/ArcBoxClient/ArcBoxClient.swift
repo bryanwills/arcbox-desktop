@@ -23,7 +23,9 @@ public final class ArcBoxClient: Sendable {
     /// Default Unix socket path for the arcbox daemon.
     public static let defaultSocketPath: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.arcbox/run/arcbox.sock"
+        let profile = Bundle.main.object(forInfoDictionaryKey: "ArcBoxProfile") as? String
+        let dataDir = profile?.caseInsensitiveCompare("development") == .orderedSame ? ".arcbox-dev" : ".arcbox"
+        return "\(home)/\(dataDir)/run/arcbox.sock"
     }()
 
     private let socketPath: String

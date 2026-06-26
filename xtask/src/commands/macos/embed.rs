@@ -13,11 +13,9 @@ use anyhow::{Context, Result, bail};
 use regex::Regex;
 use xtask_kit::apple::{self, CodesignOptions};
 
-use super::bundle::{self, BundleOptions};
+use super::bundle::{self, BundleOptions, BundleProfile};
 use crate::MacosEmbedArgs;
 use crate::support::fs as xfs;
-
-const DAEMON_NAME: &str = "com.arcboxlabs.desktop.daemon";
 
 const REQUIRED_ENTITLEMENTS: [&str; 2] = [
     "com.apple.security.virtualization",
@@ -165,6 +163,8 @@ pub fn run(_args: MacosEmbedArgs) -> Result<()> {
         .join(&version);
 
     let arcbox_repo = find_arcbox_repo(&project_dir);
+    let profile = BundleProfile::from_environment();
+    let daemon_name = profile.daemon_label();
     let local_dir = arcbox_repo
         .as_ref()
         .map(|r| r.join("target").join("release"));
@@ -218,11 +218,11 @@ pub fn run(_args: MacosEmbedArgs) -> Result<()> {
 
     // ── Embed daemon → Contents/Frameworks/*.app ──────────────────────────────
     let frameworks_dir = built_products.join(&contents_folder).join("Frameworks");
-    let daemon_bundle = frameworks_dir.join(format!("{DAEMON_NAME}.app"));
+    let daemon_bundle = frameworks_dir.join(format!("{daemon_name}.app"));
     let daemon_binary = daemon_bundle
         .join("Contents")
         .join("MacOS")
-        .join(DAEMON_NAME);
+        .join(daemon_name);
     let src_daemon = src_dir.join("arcbox-daemon");
 
     let daemon_identity = find_developer_id(Some("ArcBox, Inc."))?;
@@ -236,7 +236,7 @@ pub fn run(_args: MacosEmbedArgs) -> Result<()> {
         note("Building daemon .app bundle...");
         let entitlements = arcbox_repo
             .as_ref()
-            .map(|r| r.join("bundle").join("arcbox.entitlements"))
+            .map(|r| r.join("bundle").join(profile.daemon_entitlements_file()))
             .filter(|p| {
                 if daemon_identity.is_some() && !p.is_file() {
                     warn(&format!("Entitlements file not found at {}", p.display()));
@@ -244,6 +244,7 @@ pub fn run(_args: MacosEmbedArgs) -> Result<()> {
                 p.is_file()
             });
         bundle::bundle_daemon(&BundleOptions {
+            profile,
             daemon_binary: &src_daemon,
             output_dir: &frameworks_dir,
             provisioning_profile: None,
@@ -287,10 +288,10 @@ pub fn run(_args: MacosEmbedArgs) -> Result<()> {
     let legacy = built_products
         .join(&contents_folder)
         .join("Helpers")
-        .join(DAEMON_NAME);
+        .join(daemon_name);
     if legacy.is_file() {
         std::fs::remove_file(&legacy).with_context(|| format!("removing {}", legacy.display()))?;
-        note(&format!("Removed legacy daemon at Helpers/{DAEMON_NAME}"));
+        note(&format!("Removed legacy daemon at Helpers/{daemon_name}"));
     }
 
     // ── Embed abctl → Contents/MacOS/bin/ ─────────────────────────────────────
