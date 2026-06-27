@@ -125,6 +125,18 @@ public enum Arcbox_V1_MachineService {
                 method: "GetSystemInfo"
             )
         }
+        /// Namespace for "CompactDisk" metadata.
+        public enum CompactDisk {
+            /// Request type for "CompactDisk".
+            public typealias Input = Arcbox_V1_MachineAgentRequest
+            /// Response type for "CompactDisk".
+            public typealias Output = Arcbox_V1_Empty
+            /// Descriptor for "CompactDisk".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "arcbox.v1.MachineService"),
+                method: "CompactDisk"
+            )
+        }
         /// Namespace for "Exec" metadata.
         public enum Exec {
             /// Request type for "Exec".
@@ -159,6 +171,7 @@ public enum Arcbox_V1_MachineService {
             Inspect.descriptor,
             Ping.descriptor,
             GetSystemInfo.descriptor,
+            CompactDisk.descriptor,
             Exec.descriptor,
             SSHInfo.descriptor
         ]
@@ -333,6 +346,25 @@ extension Arcbox_V1_MachineService {
             request: GRPCCore.StreamingServerRequest<Arcbox_V1_MachineAgentRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Arcbox_V1_MachineSystemInfo>
+
+        /// Handle the "CompactDisk" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Compacts a machine's data disk by running fstrim in the guest, which
+        /// > discards free blocks so the host punches them out of the sparse image.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Arcbox_V1_MachineAgentRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Arcbox_V1_Empty` messages.
+        func compactDisk(
+            request: GRPCCore.StreamingServerRequest<Arcbox_V1_MachineAgentRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Arcbox_V1_Empty>
 
         /// Handle the "Exec" method.
         ///
@@ -527,6 +559,25 @@ extension Arcbox_V1_MachineService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Arcbox_V1_MachineSystemInfo>
 
+        /// Handle the "CompactDisk" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Compacts a machine's data disk by running fstrim in the guest, which
+        /// > discards free blocks so the host punches them out of the sparse image.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Arcbox_V1_MachineAgentRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Arcbox_V1_Empty` message.
+        func compactDisk(
+            request: GRPCCore.ServerRequest<Arcbox_V1_MachineAgentRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Arcbox_V1_Empty>
+
         /// Handle the "Exec" method.
         ///
         /// > Source IDL Documentation:
@@ -718,6 +769,25 @@ extension Arcbox_V1_MachineService {
             context: GRPCCore.ServerContext
         ) async throws -> Arcbox_V1_MachineSystemInfo
 
+        /// Handle the "CompactDisk" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Compacts a machine's data disk by running fstrim in the guest, which
+        /// > discards free blocks so the host punches them out of the sparse image.
+        ///
+        /// - Parameters:
+        ///   - request: A `Arcbox_V1_MachineAgentRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Arcbox_V1_Empty` to respond with.
+        func compactDisk(
+            request: Arcbox_V1_MachineAgentRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Arcbox_V1_Empty
+
         /// Handle the "Exec" method.
         ///
         /// > Source IDL Documentation:
@@ -850,6 +920,17 @@ extension Arcbox_V1_MachineService.StreamingServiceProtocol {
             }
         )
         router.registerHandler(
+            forMethod: Arcbox_V1_MachineService.Method.CompactDisk.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Arcbox_V1_MachineAgentRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Arcbox_V1_Empty>(),
+            handler: { request, context in
+                try await self.compactDisk(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
             forMethod: Arcbox_V1_MachineService.Method.Exec.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Arcbox_V1_MachineExecRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Arcbox_V1_MachineExecOutput>(),
@@ -959,6 +1040,17 @@ extension Arcbox_V1_MachineService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Arcbox_V1_MachineSystemInfo> {
         let response = try await self.getSystemInfo(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func compactDisk(
+        request: GRPCCore.StreamingServerRequest<Arcbox_V1_MachineAgentRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Arcbox_V1_Empty> {
+        let response = try await self.compactDisk(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -1088,6 +1180,19 @@ extension Arcbox_V1_MachineService.SimpleServiceProtocol {
     ) async throws -> GRPCCore.ServerResponse<Arcbox_V1_MachineSystemInfo> {
         return GRPCCore.ServerResponse<Arcbox_V1_MachineSystemInfo>(
             message: try await self.getSystemInfo(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func compactDisk(
+        request: GRPCCore.ServerRequest<Arcbox_V1_MachineAgentRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Arcbox_V1_Empty> {
+        return GRPCCore.ServerResponse<Arcbox_V1_Empty>(
+            message: try await self.compactDisk(
                 request: request.message,
                 context: context
             ),
@@ -1321,6 +1426,30 @@ extension Arcbox_V1_MachineService {
             deserializer: some GRPCCore.MessageDeserializer<Arcbox_V1_MachineSystemInfo>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Arcbox_V1_MachineSystemInfo>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "CompactDisk" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Compacts a machine's data disk by running fstrim in the guest, which
+        /// > discards free blocks so the host punches them out of the sparse image.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Arcbox_V1_MachineAgentRequest` message.
+        ///   - serializer: A serializer for `Arcbox_V1_MachineAgentRequest` messages.
+        ///   - deserializer: A deserializer for `Arcbox_V1_Empty` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func compactDisk<Result>(
+            request: GRPCCore.ClientRequest<Arcbox_V1_MachineAgentRequest>,
+            serializer: some GRPCCore.MessageSerializer<Arcbox_V1_MachineAgentRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Arcbox_V1_Empty>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Arcbox_V1_Empty>) async throws -> Result
         ) async throws -> Result where Result: Sendable
 
         /// Call the "Exec" method.
@@ -1662,6 +1791,41 @@ extension Arcbox_V1_MachineService {
             )
         }
 
+        /// Call the "CompactDisk" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Compacts a machine's data disk by running fstrim in the guest, which
+        /// > discards free blocks so the host punches them out of the sparse image.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Arcbox_V1_MachineAgentRequest` message.
+        ///   - serializer: A serializer for `Arcbox_V1_MachineAgentRequest` messages.
+        ///   - deserializer: A deserializer for `Arcbox_V1_Empty` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func compactDisk<Result>(
+            request: GRPCCore.ClientRequest<Arcbox_V1_MachineAgentRequest>,
+            serializer: some GRPCCore.MessageSerializer<Arcbox_V1_MachineAgentRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Arcbox_V1_Empty>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Arcbox_V1_Empty>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Arcbox_V1_MachineService.Method.CompactDisk.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
         /// Call the "Exec" method.
         ///
         /// > Source IDL Documentation:
@@ -1960,6 +2124,36 @@ extension Arcbox_V1_MachineService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Arcbox_V1_MachineAgentRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Arcbox_V1_MachineSystemInfo>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CompactDisk" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Compacts a machine's data disk by running fstrim in the guest, which
+    /// > discards free blocks so the host punches them out of the sparse image.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Arcbox_V1_MachineAgentRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func compactDisk<Result>(
+        request: GRPCCore.ClientRequest<Arcbox_V1_MachineAgentRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Arcbox_V1_Empty>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.compactDisk(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Arcbox_V1_MachineAgentRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Arcbox_V1_Empty>(),
             options: options,
             onResponse: handleResponse
         )
@@ -2283,6 +2477,40 @@ extension Arcbox_V1_MachineService.ClientProtocol {
             metadata: metadata
         )
         return try await self.getSystemInfo(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CompactDisk" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Compacts a machine's data disk by running fstrim in the guest, which
+    /// > discards free blocks so the host punches them out of the sparse image.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func compactDisk<Result>(
+        _ message: Arcbox_V1_MachineAgentRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Arcbox_V1_Empty>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Arcbox_V1_MachineAgentRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.compactDisk(
             request: request,
             options: options,
             onResponse: handleResponse
