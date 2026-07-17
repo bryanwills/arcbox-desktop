@@ -108,18 +108,20 @@ fn build_swift_app(
 ) -> Result<PathBuf> {
     println!("--- Building Swift app ---");
     let derived_data = desktop_repo.join(".build").join("DerivedData");
-    let spm_clones = PathBuf::from("/tmp/arcbox-spm-packages");
+    let spm_clones = desktop_repo.join(".build").join("SourcePackages");
 
     let mut cmd = Command::new("xcodebuild");
     cmd.arg("build")
         .arg("-project")
         .arg(desktop_repo.join("ArcBox.xcodeproj"))
         .args(["-scheme", APP_NAME, "-configuration", "Release"])
+        .arg("-showBuildTimingSummary")
         .arg("-derivedDataPath")
         .arg(&derived_data)
         .arg("-clonedSourcePackagesDirPath")
         .arg(&spm_clones)
         .arg("-skipPackagePluginValidation")
+        .arg("ARCHS=arm64")
         .arg(format!("ARCBOX_DIR={}", arcbox_dir.display()))
         .arg(format!("CURRENT_PROJECT_VERSION={build_number}"));
     if !sign_identity.is_empty() {
